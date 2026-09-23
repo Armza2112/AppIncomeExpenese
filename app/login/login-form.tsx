@@ -4,16 +4,14 @@ import { useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import Image from "next/image";
 
-type Provider = "google" | "microsoft";
+type Provider = "google";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const MICROSOFT_DOMAINS = ["hotmail.com", "outlook.com", "live.com", "msn.com"];
 
 function resolveProvider(email: string): Provider | null {
   const domain = email.split("@")[1]?.toLowerCase().trim();
   if (!domain) return null;
   if (domain === "gmail.com") return "google";
-  if (MICROSOFT_DOMAINS.includes(domain)) return "microsoft";
   return null;
 }
 
@@ -30,8 +28,7 @@ export function LoginForm() {
     setLoadingProvider(provider);
     // TODO: replace with the real OAuth flow, e.g. NextAuth.js:
     //   signIn(provider, { callbackUrl: "/" })
-    // Google provider + Azure AD / Microsoft Entra ID provider covers
-    // Gmail and Hotmail/Outlook accounts respectively.
+    // Google provider only — Gmail accounts.
     setTimeout(() => setLoadingProvider(null), 1500);
   }
 
@@ -46,7 +43,7 @@ export function LoginForm() {
     }
     const provider = resolveProvider(trimmed);
     if (!provider) {
-      setEmailError("รองรับเฉพาะอีเมล Gmail และ Hotmail/Outlook เท่านั้น");
+      setEmailError("รองรับเฉพาะอีเมล Gmail เท่านั้น");
       return;
     }
     setEmailError(null);
@@ -66,9 +63,9 @@ export function LoginForm() {
       }}
     >
       {/* Logo */}
-      <div className="relative mb-4 flex h-28 w-28 items-center justify-center">
+      <div className="relative mb-7 flex h-40 w-40 items-center justify-center">
         <div className="absolute inset-0 rounded-full border border-primary/20" aria-hidden="true" />
-        <div className="h-24 w-24 overflow-hidden rounded-full shadow-sm">
+        <div className="h-36 w-36 overflow-hidden rounded-full shadow-sm">
           <Image
             src="/logo-mascot.png"
             alt="โลโก้แอป"
@@ -80,7 +77,7 @@ export function LoginForm() {
         </div>
       </div>
 
-      <h1 className="text-2xl font-bold tracking-tight">รายรับ-รายจ่าย</h1>
+      <h1 className="text-2xl font-bold tracking-tight">Chin &amp; Chill</h1>
       <p className="mt-1 text-lg font-semibold text-primary">
         บันทึกการเงินส่วนตัว เข้าใจง่าย
       </p>
@@ -89,14 +86,7 @@ export function LoginForm() {
         เริ่มต้นได้เลย!
       </p>
 
-      {/* Feature chips */}
-      <div className="mt-6 flex max-w-sm flex-wrap items-center justify-center gap-2">
-        <FeatureChip icon={<ReceiptIcon />} label="บันทึกรายการ" />
-        <FeatureChip icon={<PieChartIcon />} label="สรุปรายจ่าย" />
-        <FeatureChip icon={<TagIcon />} label="หมวดหมู่" />
-        <FeatureChip icon={<ChartIcon />} label="งบประมาณ" />
-        <FeatureChip icon={<DownloadIcon />} label="ส่งออก CSV" />
-      </div>
+
 
       <div className="mt-8 w-full max-w-sm border-t border-border" />
 
@@ -136,7 +126,7 @@ export function LoginForm() {
           >
             นโยบายความเป็นส่วนตัว
           </a>{" "}
-          ของรายรับ-รายจ่ายแล้ว
+          ของ Chin &amp; Chill แล้ว
         </span>
       </label>
 
@@ -159,7 +149,7 @@ export function LoginForm() {
             setEmail(e.target.value);
             if (emailError) setEmailError(null);
           }}
-          aria-label="อีเมล Gmail หรือ Hotmail/Outlook ของคุณ"
+          aria-label="อีเมล Gmail ของคุณ"
           aria-invalid={emailError !== null}
           className="h-14 w-full rounded-2xl border border-border bg-card px-5 text-base text-card-foreground placeholder:text-muted-foreground focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
         />
@@ -193,17 +183,6 @@ export function LoginForm() {
         >
           {loadingProvider === "google" ? <Spinner /> : <GoogleIcon />}
           ดำเนินการต่อด้วย Google
-        </button>
-
-        <button
-          type="button"
-          onClick={() => handleSignIn("microsoft")}
-          disabled={disabled}
-          aria-label="เข้าสู่ระบบด้วยบัญชี Microsoft Hotmail หรือ Outlook"
-          className="flex h-14 w-full touch-manipulation items-center justify-center gap-2.5 rounded-2xl border border-border bg-card px-4 text-base font-semibold text-card-foreground shadow-sm transition-transform active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100"
-        >
-          {loadingProvider === "microsoft" ? <Spinner /> : <MicrosoftIcon />}
-          เข้าสู่ระบบด้วย Hotmail / Outlook
         </button>
       </div>
 
@@ -247,16 +226,6 @@ function GoogleIcon() {
   );
 }
 
-function MicrosoftIcon() {
-  return (
-    <svg className="h-5 w-5 shrink-0" viewBox="0 0 23 23" aria-hidden="true">
-      <path fill="#F25022" d="M1 1h10v10H1z" />
-      <path fill="#7FBA00" d="M12 1h10v10H12z" />
-      <path fill="#00A4EF" d="M1 12h10v10H1z" />
-      <path fill="#FFB900" d="M12 12h10v10H12z" />
-    </svg>
-  );
-}
 
 function ReceiptIcon() {
   return (

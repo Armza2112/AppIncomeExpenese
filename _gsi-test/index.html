@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Google Sign-In isolation test</title>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+  </head>
+  <body>
+    <h1>Google Sign-In isolation test</h1>
+    <p>ถ้าปุ่มข้างล่างนี้กดแล้ว error "origin not allowed" เหมือนกัน แปลว่าเป็นปัญหาฝั่ง Google Console 100% ไม่เกี่ยวกับแอป Next.js เลย</p>
+
+    <div
+      id="g_id_onload"
+      data-client_id="751462173073-oiikar4oij38m7dsd5ag7h01vsstf955.apps.googleusercontent.com"
+      data-callback="handleCredentialResponse"
+    ></div>
+    <div class="g_id_signin" data-type="standard"></div>
+
+    <pre id="log" style="margin-top: 2rem; white-space: pre-wrap"></pre>
+
+    <script>
+      function handleCredentialResponse(response) {
+        document.getElementById("log").textContent =
+          "สำเร็จ! ได้ credential กลับมาแล้ว (ยาว " +
+          response.credential.length +
+          " ตัวอักษร)";
+      }
+    </script>
+  </body>
+</html>

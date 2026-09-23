@@ -1,58 +1,177 @@
 "use client";
 
-import { useState } from "react";
-import type { FormEvent, ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { FormEvent } from "react";
 import Image from "next/image";
-
-type Provider = "google";
+import Script from "next/script";
+import { useRouter } from "next/navigation";
+import { useAuth } from "@/lib/auth-context";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-function resolveProvider(email: string): Provider | null {
-  const domain = email.split("@")[1]?.toLowerCase().trim();
-  if (!domain) return null;
-  if (domain === "gmail.com") return "google";
-  return null;
+function isGmailAddress(email: string): boolean {
+  return email.split("@")[1]?.toLowerCase().trim() === "gmail.com";
 }
 
+// --- Google Identity Services (GIS) types ---------------------------------
+// GIS is loaded via a plain <script> tag (next/script), not an npm package,
+// so TypeScript doesn't know about window.google — declare just what we use.
+type GoogleCredentialResponse = { credential: string };
+type GoogleButtonConfig = {
+  type?: "standard" | "icon";
+  theme?: "outline" | "filled_blue" | "filled_black";
+  size?: "large" | "medium" | "small";
+  text?: "signin_with" | "signup_with" | "continue_with" | "signin";
+  shape?: "rectangular" | "pill" | "circle" | "square";
+  logo_alignment?: "left" | "center";
+  width?: number;
+};
+
+declare global {
+  interface Window {
+    google?: {
+      accounts: {
+        id: {
+          initialize: (config: {
+            client_id: string;
+            callback: (response: GoogleCredentialResponse) => void;
+          }) => void;
+          renderButton: (parent: HTMLElement, options: GoogleButtonConfig) => void;
+        };
+      };
+    };
+  }
+}
+
+const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+// Google's rendered button is a fixed ~40px tall regardless of `size`; this
+// scales it up to match the h-14 (56px) buttons used elsewhere on the page.
+const GOOGLE_BTN_SCALE = 48 / 40;
+
 export function LoginForm() {
-  const [loadingProvider, setLoadingProvider] = useState<Provider | null>(
-    null
+  const router = useRouter();
+  const { user, isLoading: authLoading, loginWithGoogleIdToken } = useAuth();
+
+  const googleButtonRef = useRef<HTMLDivElement | null>(null);
+  const didRenderButton = useRef(false);
+
+  // Lazy initializer instead of an effect: on a fresh page load the GIS
+  // script genuinely hasn't loaded yet (false, correct). On a client-side
+  // remount (e.g. logout -> back to /login) the <script> tag from the
+  // earlier mount is already loaded and window.google already exists, so
+  // this picks that up immediately instead of waiting on a re-fired
+  // onLoad that next/script doesn't reliably deliver to a brand-new mount.
+  const [gisReady, setGisReady] = useState(
+    () => typeof window !== "undefined" && !!window.google
   );
   const [agreed, setAgreed] = useState(false);
   const [email, setEmail] = useState("");
   const [emailError, setEmailError] = useState<string | null>(null);
+  const [emailHint, setEmailHint] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [isSigningIn, setIsSigningIn] = useState(false);
 
-  function handleSignIn(provider: Provider) {
-    if (loadingProvider || !agreed) return;
-    setLoadingProvider(provider);
-    // TODO: replace with the real OAuth flow, e.g. NextAuth.js:
-    //   signIn(provider, { callbackUrl: "/" })
-    // Google provider only — Gmail accounts.
-    setTimeout(() => setLoadingProvider(null), 1500);
-  }
+  // Already signed in (e.g. the /auth/refresh check on app load succeeded)
+  // — bounce away from the login page instead of showing it again.
+  useEffect(() => {
+    if (!authLoading && user) {
+      router.replace("/");
+    }
+  }, [authLoading, user, router]);
+
+  const handleGoogleCredential = useCallback(
+    async (response: GoogleCredentialResponse) => {
+      setAuthError(null);
+      setIsSigningIn(true);
+      try {
+        // POST /auth/google with the Google ID token — backend verifies it,
+        // finds-or-creates the user, and returns { accessToken, user } plus
+        // a Set-Cookie for the httpOnly refresh_token.
+        await loginWithGoogleIdToken(response.credential);
+        router.replace("/");
+      } catch (err) {
+        setAuthError(
+          err instanceof Error ? err.message : "เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่"
+        );
+      } finally {
+        setIsSigningIn(false);
+      }
+    },
+    [loginWithGoogleIdToken, router]
+  );
+
+  // Initialize Google Identity Services once its script has loaded, then
+  // render Google's OWN sign-in button into our container.
+  //
+  // Deliberately not using google.accounts.id.prompt() (One Tap) — it
+  // depends on the browser silently completing a FedCM credential fetch,
+  // which fails intermittently ("FedCM get() rejects with NetworkError /
+  // AbortError") depending on third-party sign-in settings, cooldowns and
+  // extensions, even with a correctly authorized origin. renderButton()
+  // opens the same account picker but as a direct response to a real click
+  // on Google's own button — the flow FedCM actually supports reliably.
+  useEffect(() => {
+    if (!gisReady || !window.google || !GOOGLE_CLIENT_ID) return;
+    if (didRenderButton.current || !googleButtonRef.current) return;
+    didRenderButton.current = true;
+
+    window.google.accounts.id.initialize({
+      client_id: GOOGLE_CLIENT_ID,
+      callback: handleGoogleCredential,
+    });
+    window.google.accounts.id.renderButton(googleButtonRef.current, {
+      type: "standard",
+      theme: "outline",
+      size: "large",
+      shape: "pill",
+      text: "continue_with",
+      logo_alignment: "left",
+      // Google's own button tops out at ~40px tall regardless of `size`.
+      // GOOGLE_BTN_SCALE (below) visually stretches it to match the 56px
+      // (h-14) height of the other buttons on this page — the width here
+      // is the PRE-scale value, so width * GOOGLE_BTN_SCALE ends up close
+      // to the same on-screen width as those buttons.
+      width: Math.round(336 / GOOGLE_BTN_SCALE),
+    });
+  }, [gisReady, handleGoogleCredential]);
 
   function handleEmailSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (loadingProvider || !agreed) return;
+    if (!agreed || isSigningIn) return;
 
     const trimmed = email.trim();
     if (!EMAIL_REGEX.test(trimmed)) {
       setEmailError("กรุณากรอกอีเมลให้ถูกต้อง");
+      setEmailHint(null);
       return;
     }
-    const provider = resolveProvider(trimmed);
-    if (!provider) {
+    if (!isGmailAddress(trimmed)) {
       setEmailError("รองรับเฉพาะอีเมล Gmail เท่านั้น");
+      setEmailHint(null);
       return;
     }
     setEmailError(null);
-    // Route to the matching OAuth provider based on the email's domain —
-    // still no password, this only decides which OAuth screen to open.
-    handleSignIn(provider);
+    // The typed email only pre-validates the domain. Browsers won't let a
+    // script finish a Google sign-in on a real button's behalf (that's the
+    // whole point of the iframe-based button), so instead of trying to
+    // auto-launch it, point the person at the real Google button below.
+    setEmailHint(
+      `อีเมล ${trimmed} ใช้ได้ — กดปุ่ม "Sign in with Google" ด้านล่างเพื่อเข้าสู่ระบบ`
+    );
+    googleButtonRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
-  const disabled = !agreed || loadingProvider !== null;
+  const disabled = !agreed || isSigningIn;
+
+  // Avoid flashing the login form for a signed-in user while the redirect
+  // above is in flight, or while the initial /auth/refresh check runs.
+  if (authLoading || user) {
+    return (
+      <div className="flex min-h-dvh items-center justify-center bg-[linear-gradient(180deg,#f4fbfe_0%,#e1f5fe_55%,#b3e5fc_100%)]">
+        <Spinner className="h-8 w-8 text-primary" />
+      </div>
+    );
+  }
 
   return (
     <div
@@ -62,6 +181,12 @@ export function LoginForm() {
         paddingBottom: "max(2rem, env(safe-area-inset-bottom))",
       }}
     >
+      <Script
+        src="https://accounts.google.com/gsi/client?hl=th"
+        strategy="afterInteractive"
+        onLoad={() => setGisReady(true)}
+      />
+
       {/* Logo */}
       <div className="relative mb-7 flex h-40 w-40 items-center justify-center">
         <div className="absolute inset-0 rounded-full border border-primary/20" aria-hidden="true" />
@@ -85,8 +210,6 @@ export function LoginForm() {
         จัดการรายรับรายจ่ายได้ง่าย ๆ ทั้งหมวดหมู่ งบประมาณ และรายงานสรุป
         เริ่มต้นได้เลย!
       </p>
-
-
 
       <div className="mt-8 w-full max-w-sm border-t border-border" />
 
@@ -130,7 +253,7 @@ export function LoginForm() {
         </span>
       </label>
 
-      {/* Email → auto-routes to the matching OAuth provider */}
+      {/* Email → pre-checks it's a Gmail address, then triggers Google sign-in */}
       <form
         onSubmit={handleEmailSubmit}
         noValidate
@@ -156,13 +279,15 @@ export function LoginForm() {
         {emailError && (
           <p className="px-2 text-left text-xs text-red-600">{emailError}</p>
         )}
+        {emailHint && !emailError && (
+          <p className="px-2 text-left text-xs text-emerald-600">{emailHint}</p>
+        )}
         <button
           type="submit"
           disabled={disabled}
           className="flex h-14 w-full touch-manipulation items-center justify-center gap-2.5 rounded-2xl bg-primary px-4 text-base font-semibold text-primary-foreground shadow-sm transition-transform active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100"
         >
-          {loadingProvider !== null ? <Spinner /> : null}
-          ดำเนินการต่อด้วยอีเมล
+          ตรวจสอบอีเมล
         </button>
       </form>
 
@@ -172,19 +297,37 @@ export function LoginForm() {
         <span className="h-px flex-1 bg-border" aria-hidden="true" />
       </div>
 
-      {/* Buttons */}
-      <div className="flex w-full max-w-sm flex-col gap-2.5">
-        <button
-          type="button"
-          onClick={() => handleSignIn("google")}
-          disabled={disabled}
-          aria-label="ดำเนินการต่อด้วยบัญชี Google"
-          className="flex h-14 w-full touch-manipulation items-center justify-center gap-2.5 rounded-2xl border border-border bg-card px-4 text-base font-semibold text-card-foreground shadow-sm transition-transform active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100"
-        >
-          {loadingProvider === "google" ? <Spinner /> : <GoogleIcon />}
-          ดำเนินการต่อด้วย Google
-        </button>
+      {/* Google's own button, rendered for real via GIS so the click is a
+          genuine user gesture FedCM will honor. A transparent overlay blocks
+          it until the consent checkbox is ticked. */}
+      <div className="relative flex h-14 w-full max-w-sm flex-col items-center justify-center gap-2.5">
+        <div
+          ref={googleButtonRef}
+          style={{ transform: `scale(${GOOGLE_BTN_SCALE})` }}
+          className={`flex items-center justify-center transition-opacity ${
+            isSigningIn ? "pointer-events-none opacity-60" : ""
+          } ${!gisReady ? "opacity-0" : ""}`}
+        />
+        {!gisReady && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <Spinner className="h-5 w-5 text-muted-foreground" />
+          </div>
+        )}
+        {!agreed && (
+          <button
+            type="button"
+            aria-label="กรุณายอมรับเงื่อนไขก่อนเข้าสู่ระบบด้วย Google"
+            onClick={() => setAuthError("กรุณายอมรับเงื่อนไขก่อนเข้าสู่ระบบ")}
+            className="absolute inset-0 cursor-not-allowed"
+          />
+        )}
       </div>
+
+      {authError && (
+        <p className="mt-3 max-w-sm text-[11px] leading-relaxed text-red-600">
+          {authError}
+        </p>
+      )}
 
       {!agreed && (
         <p className="mt-3 text-[11px] text-muted-foreground/80">
@@ -197,76 +340,12 @@ export function LoginForm() {
   );
 }
 
-function FeatureChip({ icon, label }: { icon: ReactNode; label: string }) {
+function Spinner({ className = "h-5 w-5 shrink-0" }: { className?: string }) {
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium text-card-foreground">
-      <span className="text-primary">{icon}</span>
-      {label}
-    </span>
-  );
-}
-
-function Spinner() {
-  return (
-    <svg className="h-5 w-5 shrink-0 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <svg className={`${className} animate-spin`} viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 0 1 8-8v4a4 4 0 0 0-4 4H4z" />
     </svg>
   );
 }
 
-function GoogleIcon() {
-  return (
-    <svg className="h-5 w-5 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
-      <path fill="#4285F4" d="M23.52 12.27c0-.85-.08-1.67-.22-2.45H12v4.64h6.47a5.53 5.53 0 0 1-2.4 3.63v3.02h3.88c2.27-2.09 3.57-5.17 3.57-8.84Z" />
-      <path fill="#34A853" d="M12 24c3.24 0 5.96-1.07 7.95-2.9l-3.88-3.02c-1.08.72-2.46 1.15-4.07 1.15-3.13 0-5.78-2.11-6.73-4.96H1.27v3.11A12 12 0 0 0 12 24Z" />
-      <path fill="#FBBC05" d="M5.27 14.27a7.2 7.2 0 0 1 0-4.54V6.62H1.27a12 12 0 0 0 0 10.76l4-3.11Z" />
-      <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.44-3.44C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.69 1.27 6.62l4 3.11C6.22 6.86 8.87 4.75 12 4.75Z" />
-    </svg>
-  );
-}
-
-
-function ReceiptIcon() {
-  return (
-    <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <rect x="5" y="3" width="14" height="18" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
-      <path d="M8 8h8M8 12h8M8 16h5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function PieChartIcon() {
-  return (
-    <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="1.6" />
-      <path d="M12 4v8l6 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function TagIcon() {
-  return (
-    <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M11 3H4v7l10 10 7-7L11 3Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
-      <circle cx="8" cy="8" r="1.2" fill="currentColor" />
-    </svg>
-  );
-}
-
-function ChartIcon() {
-  return (
-    <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M5 19V10M12 19V5M19 19v-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function DownloadIcon() {
-  return (
-    <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M12 4v10m0 0-3.5-3.5M12 14l3.5-3.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M5 18h14" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-    </svg>
-  );
-}

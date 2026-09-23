@@ -6,6 +6,7 @@ import { useAuth } from "@/lib/auth-context";
 
 export default function OverviewPage() {
   const router = useRouter();
+  const { user, logout } = useAuth();
 
   if (!user) return null;
 
@@ -15,4 +16,3 @@ export default function OverviewPage() {
     </div>
   );
 }
-
